@@ -26,6 +26,7 @@ export function ItineraryPage() {
   const [selectedDate, setSelectedDate] = useState('')
   const [activities, setActivities] = useState<Activity[]>([])
   const [weather, setWeather] = useState<WeatherSnapshot & { isStale?: boolean; updatedAt?: string }>()
+  const [weatherError, setWeatherError] = useState('')
   const [loading, setLoading] = useState(true)
   const [weatherLoading, setWeatherLoading] = useState(false)
   const [showForm, setShowForm] = useState(false)
@@ -50,9 +51,17 @@ export function ItineraryPage() {
   const visibleSelectedDate = useMemo(() => visibleDays.some((day) => day.date === selectedDate) ? selectedDate : (visibleDays[0]?.date ?? selectedDate), [selectedDate, visibleDays])
   const selectedDay = useMemo(() => visibleDays.find((day) => day.date === visibleSelectedDate), [visibleDays, visibleSelectedDate])
 
-  const loadWeather = useCallback(async (currentTrip: Trip, date: string) => {
+  const loadWeather = useCallback(async (currentTrip: Trip, date: string, destination: string) => {
     setWeatherLoading(true)
-    try { setWeather(await getCachedOrFetchWeather(currentTrip.id, date, currentTrip.destination)) } catch { setWeather(undefined) } finally { setWeatherLoading(false) }
+    setWeatherError('')
+    try {
+      setWeather(await getCachedOrFetchWeather(currentTrip.id, date, destination))
+    } catch (error) {
+      setWeather(undefined)
+      setWeatherError(error instanceof Error ? error.message : '天氣資料載入失敗，請稍後再試。')
+    } finally {
+      setWeatherLoading(false)
+    }
   }, [])
 
   const loadActivities = useCallback(async (dayId: string) => setActivities(await repository.listActivities(dayId)), [])
@@ -67,7 +76,18 @@ export function ItineraryPage() {
     })()
   }, [])
 
-  useEffect(() => { if (selectedDay && trip) { void loadActivities(selectedDay.id); void loadWeather(trip, selectedDay.date) } }, [loadActivities, loadWeather, selectedDay, trip])
+  const selectedWeatherLocation = selectedDay?.weatherLocation?.trim() || selectedDay?.city?.trim() || trip?.destination || ''
+  const selectedWeatherQuery = selectedDay?.weatherCityQuery?.trim() || selectedWeatherLocation
+
+  useEffect(() => { if (selectedDay && trip) { void loadActivities(selectedDay.id); void loadWeather(trip, selectedDay.date, selectedWeatherQuery) } }, [loadActivities, loadWeather, selectedDay, selectedWeatherQuery, trip])
+
+  const saveWeatherLocation = async (selection: { location: string; countryCode: string; cityQuery: string }) => {
+    if (!selectedDay || !trip) return
+    const nextDay = { ...selectedDay, weatherLocation: selection.location, weatherCountryCode: selection.countryCode, weatherCityQuery: selection.cityQuery }
+    await repository.saveDay(nextDay)
+    setDays((current) => current.map((day) => (day.id === nextDay.id ? nextDay : day)))
+    await loadWeather(trip, nextDay.date, selection.cityQuery)
+  }
 
   const saveActivity = async (activity: Activity) => { await repository.saveActivity(activity); setShowForm(false); setEditingActivity(undefined); await loadActivities(activity.dayId) }
   const deleteActivity = async (id: string) => { await repository.deleteActivity(id); if (selectedDay) await loadActivities(selectedDay.id) }
@@ -143,7 +163,7 @@ export function ItineraryPage() {
       <button className="header-icon-button" type="button" aria-label="旅程裝扮"><Sparkles size={21} /></button>
     </header>
     <DateStrip days={visibleDays} selectedDate={visibleSelectedDate} onSelect={setSelectedDate} />
-    <WeatherCard weather={weather} loading={weatherLoading} onRefresh={() => void loadWeather(trip, selectedDay.date)} />
+    <WeatherCard key={selectedDay.id} weather={weather} error={weatherError} loading={weatherLoading} location={selectedWeatherLocation} countryCode={selectedDay.weatherCountryCode} cityQuery={selectedDay.weatherCityQuery} onSaveLocation={(selection) => void saveWeatherLocation(selection)} onRefresh={() => void loadWeather(trip, selectedDay.date, selectedWeatherQuery)} />
     <section className="day-card">
       <div className="day-card-heading">
         {editingDay && editingDay.id === selectedDay.id
